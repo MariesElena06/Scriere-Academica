@@ -14,46 +14,66 @@ void InsertionSort(int array[], int n);
 void MergeSort(int array[], int st, int dr);
 void Interclasare(int array[], int st, int mij, int dr);
 void QuickSort(int array[], int st, int dr);
-int elem_maxim(int array[], int n);
-void CountSort(int array[], int n);
-void counting(int array[], int n, int c);
+void CountingSort(int array[], int n);
+void counting(int array[], int n, int c, int *aux);
 void RadixSort(int array[], int n);
 void heapify(int array[], int n, int i);
 void HeapSort(int array[], int n);
 
-// functia pentru determinarea timpului de executie:
-
-#ifdef _WIN32
+// functia pentru determinarea timpului de executie (cu timeout):
 #include <windows.h>
-double masurareTimp(void (*algoritmSortare)(int [], int), int array[], int n){
-    LARGE_INTEGER freq, start, end;
+#include <time.h>
 
+typedef struct {
+    void (*alg)(int [], int);
+    int *array;
+    int n;
+    double time;
+} Task;
+
+DWORD WINAPI run(LPVOID param){
+    Task *t = (Task*)param;
+
+    LARGE_INTEGER freq, start, end;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&start);
 
-    algoritmSortare(array, n);
+    t->alg(t->array, t->n);
 
     QueryPerformanceCounter(&end);
 
-    return (double)(end.QuadPart - start.QuadPart) / freq.QuadPart;
+    t->time = (double)(end.QuadPart - start.QuadPart) / freq.QuadPart;
+
+    return 0;
 }
 
-#else
-#define _POSIX_C_SOURCE 199309L
-#include <time.h>
+double masurareTimp(void (*alg)(int [], int), int array[], int n, double limita, int *timeout){
+    *timeout = 0;
 
-double masurareTimp(void (*algoritmSortare)(int [], int), int array[], int n){
-    struct timespec start, end;
+    Task *task = malloc(sizeof(Task));
+    task->alg = alg;
+    task->array = array;
+    task->n = n;
+    task->time = 0;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    HANDLE hThread = CreateThread(NULL, 0, run, task, 0, NULL);
 
-    algoritmSortare(array, n);
+    DWORD wait = WaitForSingleObject(hThread, (DWORD)(limita * 1000));
 
-    clock_gettime(CLOCK_MONOTONIC, &end);
+    if (wait == WAIT_TIMEOUT){
+        *timeout = 1;
+        TerminateThread(hThread, 0);
+        CloseHandle(hThread);
+        free(task);
+        return limita;
+    }
 
-    return (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    CloseHandle(hThread);
+
+    double t = task->time;
+    free(task);
+    return t;
 }
-#endif
 
 // algoritmii de generare a sirurilor de elemente:
 
@@ -101,6 +121,15 @@ int elem_maxim(int array[], int n){
             maxim = array[i];
 
     return maxim;
+}
+int elem_minim(int array[], int n){
+    int minim = array[0];
+
+    for (int i = 1; i < n; i++)
+        if (array[i] < minim)
+            minim = array[i];
+
+    return minim;
 }
 
 // algoritmii de sortare:
@@ -174,8 +203,10 @@ void Interclasare(int array[], int st, int mij, int dr){
     while (j <= dr)
         I[k++] = array[j++];  
 
-    for (int i = 0; i < k; i++)
-        array[st + i] = I[i];
+    for (int a = 0; a < k; a++)
+        array[st + a] = I[a];
+
+    free(I);
 }
 
 void MergeSortWrap(int array[], int n){
@@ -209,36 +240,33 @@ void QuickSortWrap(int array[], int n){
 }
 
 //Count Sort
-void CountSort(int array[], int n){
-    int maxim = elem_maxim(array, n);
-    int *freq = (int*) malloc ((maxim + 1) * sizeof(int));
-    int *aux = (int*) malloc (n * sizeof(int));
+void CountingSort(int array[], int n){
+    int maxim = elem_maxim(array, n), minim = elem_minim(array, n);
+    int range = maxim - minim + 1;
 
-    for (int i = 0; i <= maxim; i++)
-        freq[i] = 0;
+    int *freq = calloc (range, sizeof(int));
+    int *aux = malloc (n * sizeof(int));
 
     for (int i = 0; i < n; i++)
-        freq[array[i]]++;
+        freq[array[i] - minim]++;
 
-    for (int i = 1; i <= maxim; i++) 
+    for (int i = 1; i < range; i++) 
         freq[i] += freq[i - 1];
 
     for (int i = n - 1; i >= 0; i--){
-        aux[freq[array[i]] - 1] = array[i];
-        freq[array[i]]--;;
+        aux[freq[array[i] - minim] - 1] = array[i];
+        freq[array[i] - minim]--;
     }
     
-    for (int i = 0; i < n; i++)
-        array[i] = aux[i];
-
-    free(aux);
+    memcpy(array, aux, n * sizeof(int));
+    
     free(freq);
+    free(aux);
 }
 
 //RadixSort
-void counting(int array[], int n, int exp){
+void counting(int array[], int n, int exp, int *aux){
     int freq[10] = {0};
-    int *aux = (int*) malloc (n * sizeof(int));
 
     for (int i = 0; i < n; i++)
         freq[(array[i] / exp) % 10]++;
@@ -252,15 +280,53 @@ void counting(int array[], int n, int exp){
         freq[cif]--;
     }
 
-    for (int i = 0; i < n; i++)
-        array[i] = aux[i];
-
-    free(aux);
+    memcpy(array, aux, n * sizeof(int));
 }
 void RadixSort(int array[], int n){
-    int maxim = elem_maxim(array, n);
-    for (int exp = 1; maxim / exp > 0; exp *= 10)
-        counting(array, n, exp);
+    int *neg = malloc(n * sizeof(int));
+    int *pos = malloc(n * sizeof(int));
+    int *aux = malloc(n * sizeof(int));
+
+    int nneg = 0, npos = 0;
+
+    for (int i = 0; i < n; i++){
+        if (array[i] < 0)
+            neg[nneg++] = -array[i];
+        else
+            pos[npos++] = array[i];
+    }
+
+    if (npos > 0){
+        int maxp = elem_maxim(pos, npos);
+        for (int exp = 1; maxp / exp > 0; exp *= 10)
+            counting(pos, npos, exp, aux);
+    }
+
+    if (nneg > 0){
+        int maxn = elem_maxim(neg, nneg);
+
+        for (int exp = 1; maxn / exp > 0; exp *= 10)
+            counting(neg, nneg, exp, aux);
+
+        for (int i = 0; i < nneg / 2; i++){
+            int temp = neg[i];
+            neg[i] = neg[nneg - i - 1];
+            neg[nneg - i - 1] = temp;
+        }
+
+        for (int i = 0; i < nneg; i++)
+            neg[i] = -neg[i];
+    }
+
+    int k = 0;
+    for (int i = 0; i < nneg; i++)
+        array[k++] = neg[i];
+    for (int i = 0; i < npos; i++)
+        array[k++] = pos[i];
+
+    free(pos);
+    free(neg);
+    free(aux);
 }
 
 //HeapSort
@@ -295,11 +361,11 @@ void HeapSort(int array[], int n){
 }
 
 int main(){
-    int dimensiuni[] = {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000};
+    int dimensiuni[] = {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000};
     int nr_dim = sizeof(dimensiuni) / sizeof(dimensiuni[0]);
 
     FILE *out = fopen("Rezultate_Sortari.csv", "w");
-    fprintf(out, "Dimensiune, Algoritm, Random, Sortat, Reverse, Jumatate Sortat, Aproape Sortat\n");
+    fprintf(out, "Dimensiune,Algoritm,Random,Sortat,Reverse,Jumatate Sortat,Aproape Sortat\n");
 
     struct {
         const char *nume;
@@ -310,12 +376,22 @@ int main(){
         {"Insertion Sort", InsertionSort},
         {"Merge Sort", MergeSortWrap},
         {"Quick Sort", QuickSortWrap},
-        {"Count Sort", CountSort},
+        {"Counting Sort", CountingSort},
         {"Radix Sort", RadixSort},
         {"Heap Sort", HeapSort}
     };
 
     int nr_algos = sizeof(algo) / sizeof(algo[0]);
+
+    void (*gen[5])(int [], int) = {
+                generareRandom,
+                generareSortat,
+                generareReverse,
+                generareJumatateSortat,
+                generareAproapeSortat
+    };
+
+    const char *tip_gen[5] = {"Random", "Sortat", "Reverse", "Jumatate Sortat", "Aproape Sortat"};
 
     for (int s = 0; s < nr_dim; s++){
         int n = dimensiuni[s];
@@ -324,25 +400,7 @@ int main(){
         int *arr = (int*) malloc (n * sizeof(int));
 
         for (int a = 0; a < nr_algos; a++){
-            double tip[5];
-
-            if (dimensiuni[s] >= 200000 && 
-                (strcmp(algo[a].nume, "Bubble Sort") == 0 ||
-                strcmp(algo[a].nume, "Selection Sort") == 0 ||
-                strcmp(algo[a].nume, "Insertion Sort") == 0)){
-                printf("<Dimensiune: %d> - Trecem peste %s deoarece dimensiunea este prea mare.\n\n", dimensiuni[s], algo[a].nume);
-                continue;
-            }
-
-            void (*gen[5])(int [], int) = {
-                generareRandom,
-                generareSortat,
-                generareReverse,
-                generareJumatateSortat,
-                generareAproapeSortat
-            };
-
-            const char *tip_gen[5] = {"Random", "Sortat", "Reverse", "Jumatate Sortat", "Aproape Sortat"};
+            char tip[5][20] = {{0}};
         
             for (int g = 0; g < 5; g++){
                 printf("<Dimensiune: %d> - Testam %s pe un vector %s\n", n, algo[a].nume, tip_gen[g]);
@@ -350,12 +408,21 @@ int main(){
                 gen[g](base, n);
                 memcpy(arr, base, n * sizeof(int));
 
-                tip[g] = masurareTimp(algo[a].functie, arr, n);
+                int timeout = 0;
 
-                printf("<Dimensiune: %d> - %s testat pe vector %s completat in %.6f s\n\n", n, algo[a].nume, tip_gen[g], tip[g]);
+                double t = masurareTimp(algo[a].functie, arr, n, 15.0, &timeout);
+
+                if (timeout){
+                    printf("<Dimensiune: %d> - TIMEOUT (>15 sec)\n", n);
+                    strcpy(tip[g], "15+");
+                }
+                else
+                    sprintf(tip[g], "%.8f", t);
+
+                printf("<Dimensiune: %d> - %s testat pe vector %s completat in %s s\n\n", n, algo[a].nume, tip_gen[g], tip[g]);
             }
 
-            fprintf(out, "%d,%s,%.6f,%.6f,%.6f,%.6f,%.6f\n", n, algo[a].nume, tip[0], tip[1], tip[2], tip[3], tip[4]);
+            fprintf(out, "%d,%s,%s,%s,%s,%s,%s\n", n, algo[a].nume, tip[0], tip[1], tip[2], tip[3], tip[4]);
         }
 
         free(base);
