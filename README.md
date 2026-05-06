@@ -1,2 +1,2 @@
 # Scriere-Academica
-Scriere Academică - Studiul complexității unor algoritmi de sortare studiați.
+Scriere Academică - Analiza performaței unor algoritmi de sortare studiați.
